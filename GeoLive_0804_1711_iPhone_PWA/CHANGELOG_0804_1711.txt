@@ -1,0 +1,18 @@
+GeoLive 0804.1711｜iPhone PWA 行政區離線地圖校正版
+
+基底：0804.1348
+本次只處理底圖與離線地圖下載範圍，不重寫其他功能。
+
+修正：
+1. 預設底圖由衛星影像 PHOTO2 改為 NLSC 臺灣通用電子地圖道路版
+   EMAP6_OPENDATA，固定最高 Zoom 15。
+2. 舊版只用行政區 bounding box，因此會把鄰近鄉鎮一起下載。
+3. 新版取得 Polygon / MultiPolygon 行政區邊界後，再計算 Zoom 15 圖磚。
+4. 只有「圖磚中心落在選定行政區 Polygon 內」才會下載。
+5. 行政區搜尋必須同時符合縣市與鄉鎮市區名稱；不再錯誤使用搜尋結果第一筆。
+6. 找不到完全相符的行政區時直接停止，不下載錯誤範圍。
+7. manifest 會保存 matched_name、geometry、range_method，方便後續核對。
+
+未修改：
+GPS、Start/Pause/Resume/Finish、照片、EXIF、專案管理、
+GPX/KMZ/SHP 匯出、既有 UI 配置。
