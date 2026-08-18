@@ -1,8 +1,0 @@
-GeoLive 0804.1348 FULL PWA
-1. 將專案與離線地圖資料改存 IndexedDB / Cache Storage。
-2. 移植 GPX、KMZ、SHP/SHX/DBF/PRJ 與照片 ZIP 匯出。
-3. 移植照片 EXIF GPS 解析。
-4. 移植縣市＋區／鄉鎮市 Zoom 15 圖磚下載與管理。
-5. 保留多專案、照片縮放、地形剖面與 GPS 記錄。
-6. 加入 PWA 安裝及 Service Worker 離線啟動。
-7. 模擬離線改為要求 iPhone 真正開啟飛航模式，並顯示實際網路狀態。
