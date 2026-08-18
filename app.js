@@ -1,5 +1,5 @@
 
-const VERSION='0804.1712';
+const VERSION='0804.1714';
 const TILE_URL='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 const LEGACY_TILE_CACHE='geolive-tiles-z15-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
@@ -14,6 +14,33 @@ function safeName(s){return String(s||'project').replace(/[\\/:*?"<>|]+/g,'_').t
 function openDB(){return new Promise((ok,no)=>{const r=indexedDB.open(DB_NAME,DB_VERSION);r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains('projects'))d.createObjectStore('projects',{keyPath:'name'});if(!d.objectStoreNames.contains('offline'))d.createObjectStore('offline',{keyPath:'id'});};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
 async function dbOp(store,mode,action){const d=await openDB();return new Promise((ok,no)=>{const tx=d.transaction(store,mode),os=tx.objectStore(store),r=action(os);r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
 const dbAll=s=>dbOp(s,'readonly',o=>o.getAll()), dbGet=(s,k)=>dbOp(s,'readonly',o=>o.get(k)), dbPut=(s,v)=>dbOp(s,'readwrite',o=>o.put(v)), dbDel=(s,k)=>dbOp(s,'readwrite',o=>o.delete(k));
+
+let TOWN_BOUNDARIES=null;
+async function loadTownBoundaries(){
+  if(TOWN_BOUNDARIES)return TOWN_BOUNDARIES;
+  const r=await fetch('./town_boundaries.geojson',{cache:'no-store'});
+  if(!r.ok)throw new Error('無法讀取全臺鄉鎮市區界線資料');
+  TOWN_BOUNDARIES=await r.json();
+  return TOWN_BOUNDARIES;
+}
+async function resolveLocalTownBoundary(city,district){
+  const data=await loadTownBoundaries();
+  const feature=(data.features||[]).find(f=>{
+    const p=f.properties||{};
+    return p.COUNTYNAME===city && p.TOWNNAME===district;
+  });
+  if(!feature){
+    throw new Error(`找不到「${city}${district}」的本機鄉鎮市區界線`);
+  }
+  const b=feature.bbox;
+  return {
+    bounds:[b[0],b[1],b[2],b[3]],
+    geometry:feature.geometry,
+    matchedName:`${feature.properties.COUNTYNAME}${feature.properties.TOWNNAME}`,
+    townCode:feature.properties.TOWNCODE
+  };
+}
+
 
 function initMap(){
  map=L.map('map',{zoomControl:true}).setView([23.7,121],7);
@@ -115,10 +142,65 @@ function tileCenterLonLat(x,y,z){
   const latRad=Math.atan(Math.sinh(Math.PI*(1-2*(y+0.5)/n)));
   return[lon,latRad*180/Math.PI];
 }
+
+function tileLonLatBounds(x,y,z){
+  const n=2**z;
+  const west=x/n*360-180, east=(x+1)/n*360-180;
+  const north=Math.atan(Math.sinh(Math.PI*(1-2*y/n)))*180/Math.PI;
+  const south=Math.atan(Math.sinh(Math.PI*(1-2*(y+1)/n)))*180/Math.PI;
+  return [west,south,east,north];
+}
+function pointOnSegment(p,a,b){
+  const cross=(p[1]-a[1])*(b[0]-a[0])-(p[0]-a[0])*(b[1]-a[1]);
+  if(Math.abs(cross)>1e-10)return false;
+  return p[0]>=Math.min(a[0],b[0])-1e-10 && p[0]<=Math.max(a[0],b[0])+1e-10 &&
+         p[1]>=Math.min(a[1],b[1])-1e-10 && p[1]<=Math.max(a[1],b[1])+1e-10;
+}
+function segmentsIntersect(a,b,c,d){
+  const orient=(p,q,r)=>{
+    const v=(q[1]-p[1])*(r[0]-q[0])-(q[0]-p[0])*(r[1]-q[1]);
+    if(Math.abs(v)<1e-12)return 0;
+    return v>0?1:2;
+  };
+  const o1=orient(a,b,c),o2=orient(a,b,d),o3=orient(c,d,a),o4=orient(c,d,b);
+  if(o1!==o2&&o3!==o4)return true;
+  return (o1===0&&pointOnSegment(c,a,b))||(o2===0&&pointOnSegment(d,a,b))||
+         (o3===0&&pointOnSegment(a,c,d))||(o4===0&&pointOnSegment(b,c,d));
+}
+function ringIntersectsRect(ring,rect){
+  const[w,s,e,n]=rect;
+  for(const p of ring){
+    if(p[0]>=w&&p[0]<=e&&p[1]>=s&&p[1]<=n)return true;
+  }
+  const corners=[[w,s],[e,s],[e,n],[w,n]];
+  if(corners.some(c=>pointInRing(c,ring)))return true;
+  const edges=[[[w,s],[e,s]],[[e,s],[e,n]],[[e,n],[w,n]],[[w,n],[w,s]]];
+  for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+    for(const [c,d] of edges){
+      if(segmentsIntersect(ring[j],ring[i],c,d))return true;
+    }
+  }
+  return false;
+}
+function polygonIntersectsTile(poly,x,y,z){
+  if(!poly?.length)return false;
+  const rect=tileLonLatBounds(x,y,z);
+  // Outer boundary intersection or tile center contained in polygon, respecting holes.
+  if(ringIntersectsRect(poly[0],rect))return true;
+  const center=tileCenterLonLat(x,y,z);
+  return pointInPolygon(center,poly);
+}
+function geometryIntersectsTile(geometry,x,y,z){
+  if(!geometry)return false;
+  if(geometry.type==='Polygon')return polygonIntersectsTile(geometry.coordinates,x,y,z);
+  if(geometry.type==='MultiPolygon')return geometry.coordinates.some(poly=>polygonIntersectsTile(poly,x,y,z));
+  return false;
+}
+
 async function downloadOffline(city,district,status,bar){
   const z=15;
-  status.textContent=`正在確認 ${city}${district} 行政區邊界…`;
-  const region=await resolveRegionPolygon(city,district);
+  status.textContent=`正在讀取 ${city}${district} 鄉鎮市區界線…`;
+  const region=await resolveLocalTownBoundary(city,district);
   const bounds=region.bounds;
   const geometry=region.geometry;
   const[x1,x2,y1,y2]=tileBounds(bounds,z);
@@ -126,7 +208,7 @@ async function downloadOffline(city,district,status,bar){
   const jobs=[];
   for(let x=x1;x<=x2;x++){
     for(let y=y1;y<=y2;y++){
-      if(pointInGeometry(tileCenterLonLat(x,y,z),geometry))jobs.push([x,y]);
+      if(geometryIntersectsTile(geometry,x,y,z))jobs.push([x,y]);
     }
   }
 
@@ -163,7 +245,7 @@ async function downloadOffline(city,district,status,bar){
     matched_name:region.matchedName,
     zoom:15,expected_tiles:expected,tiles:expected-errors,errors,
     basemap:'NLSC EMAP6_OPENDATA',
-    range_method:'exact polygon',
+    range_method:'MOI township polygon',
     cache_name:cacheName,
     created:new Date().toISOString()
   };
@@ -171,23 +253,42 @@ async function downloadOffline(city,district,status,bar){
   return m;
 }
 async function loadOffline(){return(await dbAll('offline')).sort((a,b)=>String(b.created).localeCompare(String(a.created)))}
+class CachedRegionLayer extends L.GridLayer{
+  constructor(meta,opts={}){
+    super(opts);
+    this.meta=meta;
+  }
+  createTile(coords,done){
+    const tile=document.createElement('img');
+    tile.alt='';
+    tile.setAttribute('role','presentation');
+    tile.style.width='256px';
+    tile.style.height='256px';
+    const source=tileUrl(coords.z,coords.x,coords.y);
+    caches.open(this.meta.cache_name).then(c=>c.match(source)).then(resp=>{
+      if(!resp)throw new Error('tile not cached');
+      return resp.blob();
+    }).then(blob=>{
+      const u=URL.createObjectURL(blob);
+      tile.onload=()=>{URL.revokeObjectURL(u);done(null,tile)};
+      tile.onerror=()=>{URL.revokeObjectURL(u);done(new Error('tile image error'),tile)};
+      tile.src=u;
+    }).catch(err=>done(err,tile));
+    return tile;
+  }
+}
 async function toggleOffline(id){
   if(state.offlineLayers.has(id)){
     map.removeLayer(state.offlineLayers.get(id));
     state.offlineLayers.delete(id);
     return;
   }
-
   const m=await dbGet('offline',id);
   if(!m)return;
-
-  // ★ 1712 修正：URL 帶入 region id，Service Worker 只讀取該行政區自己的 cache。
-  const offlineUrl=`./offline-tile/${encodeURIComponent(id)}/{z}/{x}/{y}.png`;
-  const l=L.tileLayer(offlineUrl,{
+  const l=new CachedRegionLayer(m,{
     minNativeZoom:15,maxNativeZoom:15,minZoom:2,maxZoom:20,
     bounds:[[m.bounds[1],m.bounds[0]],[m.bounds[3],m.bounds[2]]]
   }).addTo(map);
-
   state.offlineLayers.set(id,l);
   map.fitBounds([[m.bounds[1],m.bounds[0]],[m.bounds[3],m.bounds[2]]]);
 }

@@ -1,11 +1,11 @@
 
-const APP_CACHE='geolive-app-0804-1712-v1';
+const APP_CACHE='geolive-app-0804-1714-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
 const TILE_SOURCE='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 
 const SHELL=[
  './','./index.html','./style.css','./app.js','./manifest.webmanifest',
- './icon-180.png','./icon-192.png','./icon-512.png'
+ './icon-180.png','./icon-192.png','./icon-512.png','./town_boundaries.geojson'
 ];
 const EXTERNAL=[
  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
