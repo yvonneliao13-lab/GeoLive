@@ -1,5 +1,5 @@
 
-const VERSION='0804.1716';
+const VERSION='0804.1717';
 const TILE_URL='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 const LEGACY_TILE_CACHE='geolive-tiles-z15-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
@@ -85,12 +85,74 @@ function showLarge(url){$('#modalTitle').textContent='照片';$('#modalBody').in
 function markerForPhoto(ph){if(ph.lat==null||ph.lon==null||!ph.data)return null;const m=L.marker([ph.lat,ph.lon],{icon:photoIcon(ph.data),keyboard:false});m._photoUrl=ph.data;m.on('dblclick',()=>showLarge(ph.data));return m}
 function refreshPhotoIcons(){for(const p of state.projects.values())for(const m of p.photoMarkers)m.setIcon(photoIcon(m._photoUrl));for(const m of state.livePhotoMarkers)m.setIcon(photoIcon(m._photoUrl));declutter()}
 function declutter(){const all=[];for(const p of state.projects.values())if(p.open)all.push(...p.photoMarkers);all.push(...state.livePhotoMarkers);const occ=[];const[w,h]=zoomPhotoSize();for(const m of all){if(!map.hasLayer(m))continue;const pt=map.latLngToContainerPoint(m.getLatLng());const hit=occ.some(q=>Math.abs(q.x-pt.x)<w*.75&&Math.abs(q.y-pt.y)<h*.75);m.setOpacity(hit&&map.getZoom()<15?0:1);if(!hit)occ.push(pt)}}
-function drawProfile(points){const c=$('#profileCanvas'),x=c.getContext('2d');x.clearRect(0,0,c.width,c.height);const vals=points.map(p=>Number(p[2]||0)).filter(Number.isFinite);if(vals.length<2){x.fillText('尚無高度資料',8,18);return}const mn=Math.min(...vals),mx=Math.max(...vals),range=Math.max(1,mx-mn);x.beginPath();vals.forEach((v,i)=>{const px=8+i*(c.width-16)/(vals.length-1),py=c.height-8-(v-mn)*(c.height-22)/range;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();x.fillText(`${mx.toFixed(1)} m`,5,12);x.fillText(`${mn.toFixed(1)} m`,5,c.height-2)}
+function haversineMeters(a,b){
+  const R=6371000;
+  const rad=v=>v*Math.PI/180;
+  const dLat=rad(b[0]-a[0]),dLon=rad(b[1]-a[1]);
+  const la1=rad(a[0]),la2=rad(b[0]);
+  const h=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+function drawProfile(points){
+  const c=$('#profileCanvas'),ctx=c.getContext('2d');
+  const W=c.width,H=c.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.font='11px -apple-system, sans-serif';
+  ctx.fillStyle='#333';
+
+  const valid=(points||[]).filter(p=>Number.isFinite(Number(p[0]))&&Number.isFinite(Number(p[1]))&&Number.isFinite(Number(p[2])));
+  if(valid.length<2){
+    ctx.fillText('尚無足夠的 GPS 高度資料',10,18);
+    return;
+  }
+
+  const d=[0];
+  for(let i=1;i<valid.length;i++)d.push(d[i-1]+haversineMeters(valid[i-1],valid[i]));
+  const elev=valid.map(p=>Number(p[2]));
+  const total=d[d.length-1];
+  const mn=Math.min(...elev),mx=Math.max(...elev),range=Math.max(1,mx-mn);
+
+  const L=42,R=8,T=10,B=24,pw=W-L-R,ph=H-T-B;
+  ctx.strokeStyle='#aaa';
+  ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(L,T);ctx.lineTo(L,H-B);ctx.lineTo(W-R,H-B);ctx.stroke();
+
+  ctx.fillStyle='#555';
+  ctx.fillText(`${mx.toFixed(0)}m`,2,T+5);
+  ctx.fillText(`${mn.toFixed(0)}m`,2,H-B+3);
+
+  const distLabel=total>=1000?`${(total/1000).toFixed(2)} km`:`${Math.round(total)} m`;
+  ctx.fillText('0',L-2,H-6);
+  const tw=ctx.measureText(distLabel).width;
+  ctx.fillText(distLabel,W-R-tw,H-6);
+
+  ctx.strokeStyle='#111';
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  elev.forEach((v,i)=>{
+    const px=L+(total>0?d[i]/total:0)*pw;
+    const py=T+ph-(v-mn)/range*ph;
+    if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+  });
+  ctx.stroke();
+
+  ctx.fillStyle='#333';
+  const label='距離';
+  const lw=ctx.measureText(label).width;
+  ctx.fillText(label,L+(pw-lw)/2,H-6);
+}
 function clearLive(){if(state.liveLine)map.removeLayer(state.liveLine);state.livePhotoMarkers.forEach(m=>map.removeLayer(m));state.liveLine=null;state.livePhotoMarkers=[];state.points=[];state.photos=[];drawProfile([])}
 function updateLiveLine(){if(!state.liveLine)state.liveLine=L.polyline([],{color:'red',weight:4}).addTo(map);state.liveLine.setLatLngs(state.points.map(p=>[p[0],p[1]]));drawProfile(state.points)}
 function startWatch(){if(state.watchId!=null)return;if(!navigator.geolocation){toast('Safari 不支援 GPS');return}state.watchId=navigator.geolocation.watchPosition(pos=>{const{latitude,longitude,altitude}=pos.coords;setCoords(latitude,longitude);if(state.recording&&!state.paused){state.points.push([latitude,longitude,altitude||0]);updateLiveLine()}if(map.getZoom()<12)map.setView([latitude,longitude],16)},err=>toast('GPS 錯誤：'+err.message,5000),{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
 function stopWatch(){if(state.watchId!=null)navigator.geolocation.clearWatch(state.watchId);state.watchId=null}
-function setRecordingUI(){$('#finishBtn').classList.toggle('hidden',!state.recording);$('#cameraBtn').classList.toggle('hidden',!state.recording||state.paused);$('#mainBtn').textContent=!state.recording?'Start':state.paused?'Resume':'Pause'}
+function setRecordingUI(){
+  $('#finishBtn').classList.toggle('hidden',!state.recording);
+  $('#cameraBtn').classList.toggle('hidden',!state.recording||state.paused);
+  const label=$('#mainBtnLabel');
+  if(label)label.textContent=!state.recording?'開始':state.paused?'繼續':'暫停';
+  const icon=$('#mainBtn .action-icon');
+  if(icon)icon.textContent=!state.recording?'●':state.paused?'▶':'Ⅱ';
+}
 
 function fileDataURL(f){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f)})}
 async function exifGPS(file){try{if(window.exifr){const g=await exifr.gps(file);if(g&&Number.isFinite(g.latitude)&&Number.isFinite(g.longitude))return[g.latitude,g.longitude,0]}}catch(e){}return null}
@@ -444,71 +506,71 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
 
 (async()=>{try{initMap();await migrateOfflineCache1716();await loadProjects();startWatch();updateNetwork();drawProfile([])}catch(e){toast('初始化失敗：'+e.message,5000)}})();
 
-// ===== 0804.1715 iPhone field sensors: compass + dip =====
+
+
+// ===== 0804.1717 dip measurement =====
 (()=>{
-  let dipZero=0, compassStarted=false, dipStarted=false;
-  const $=id=>document.getElementById(id);
-  const norm=a=>((a%360)+360)%360;
-  const cardinal=a=>{
-    const d=['N','NE','E','SE','S','SW','W','NW'];
-    return d[Math.round(norm(a)/45)%8];
-  };
-  function headingFromEvent(e){
-    if(typeof e.webkitCompassHeading==='number') return norm(e.webkitCompassHeading);
-    if(typeof e.alpha==='number') return norm(360-e.alpha);
-    return null;
-  }
+  let dipZero=0;
+  let dipStarted=false;
+  let permissionReady=false;
+
+  function el(id){return document.getElementById(id)}
   function onOrientation(e){
-    const h=headingFromEvent(e);
-    if(compassStarted && h!==null){
-      $('headingValue').textContent=Math.round(h)+'°';
-      $('headingCardinal').textContent=cardinal(h);
-      $('compassDial').style.transform=`rotate(${-h}deg)`;
-    }
-    if(dipStarted){
-      // beta/gamma are device tilt components. Result is the magnitude of tilt
-      // from a level screen plane; suitable as a phone clinometer.
-      const beta=Number.isFinite(e.beta)?e.beta:0;
-      const gamma=Number.isFinite(e.gamma)?e.gamma:0;
-      let tilt=Math.atan(Math.sqrt(
-        Math.tan(beta*Math.PI/180)**2 + Math.tan(gamma*Math.PI/180)**2
-      ))*180/Math.PI;
-      tilt=Math.max(0,Math.min(90,tilt));
-      const shown=Math.max(0,Math.min(90,tilt-dipZero));
-      $('dipValue').textContent=shown.toFixed(1)+'°';
-      const dominant=Math.abs(beta)>=Math.abs(gamma)?(beta>=0?'手機上端較高':'手機上端較低'):(gamma>=0?'手機右側較高':'手機左側較高');
-      $('dipDirection').textContent=dominant;
-      $('dipValue').dataset.raw=tilt.toString();
-    }
+    if(!dipStarted)return;
+    const beta=Number.isFinite(e.beta)?e.beta:0;
+    const gamma=Number.isFinite(e.gamma)?e.gamma:0;
+
+    let tilt=Math.atan(Math.sqrt(
+      Math.tan(beta*Math.PI/180)**2+
+      Math.tan(gamma*Math.PI/180)**2
+    ))*180/Math.PI;
+    tilt=Math.max(0,Math.min(90,tilt));
+
+    const shown=Math.max(0,Math.min(90,tilt-dipZero));
+    el('dipValue').textContent=shown.toFixed(1)+'°';
+    el('dipValue').dataset.raw=tilt.toString();
+
+    const dominant=Math.abs(beta)>=Math.abs(gamma)
+      ?(beta>=0?'手機上端較高':'手機上端較低')
+      :(gamma>=0?'手機右側較高':'手機左側較高');
+    el('dipDirection').textContent=dominant;
   }
-  async function requestOrientationPermission(){
-    if(typeof DeviceOrientationEvent==='undefined') throw new Error('此裝置不支援方向感測器');
+
+  async function ensureMotionPermission(){
+    if(permissionReady)return;
+    if(typeof DeviceOrientationEvent==='undefined')throw new Error('此裝置不支援傾角感測器');
     if(typeof DeviceOrientationEvent.requestPermission==='function'){
       const p=await DeviceOrientationEvent.requestPermission();
-      if(p!=='granted') throw new Error('未允許動作與方向存取');
+      if(p!=='granted')throw new Error('未允許「動作與方向」存取');
     }
     window.addEventListener('deviceorientation',onOrientation,true);
-  }
-  let permissionReady=false;
-  async function ensurePermission(){
-    if(permissionReady)return;
-    await requestOrientationPermission();
     permissionReady=true;
   }
-  $('startCompassBtn')?.addEventListener('click',async()=>{
-    try{
-      await ensurePermission(); compassStarted=true;
-      $('sensorStatus').textContent='指北針已啟用';
-    }catch(err){$('sensorStatus').textContent=err.message;}
+
+  el('dipBtn')?.addEventListener('click',()=>{
+    el('dipModal')?.classList.remove('hidden');
   });
-  $('startDipBtn')?.addEventListener('click',async()=>{
-    try{
-      await ensurePermission(); dipStarted=true;
-      $('sensorStatus').textContent='傾角測量已啟用';
-    }catch(err){$('sensorStatus').textContent=err.message;}
+  el('dipClose')?.addEventListener('click',()=>{
+    el('dipModal')?.classList.add('hidden');
   });
-  $('zeroDipBtn')?.addEventListener('click',()=>{
-    const raw=parseFloat($('dipValue')?.dataset.raw);
-    if(Number.isFinite(raw)){dipZero=raw;$('dipValue').textContent='0.0°';}
+  el('dipModal')?.addEventListener('click',e=>{
+    if(e.target===el('dipModal'))el('dipModal').classList.add('hidden');
+  });
+  el('startDipBtn')?.addEventListener('click',async()=>{
+    try{
+      await ensureMotionPermission();
+      dipStarted=true;
+      el('sensorStatus').textContent='傾角測量已啟用';
+    }catch(err){
+      el('sensorStatus').textContent=err.message;
+    }
+  });
+  el('zeroDipBtn')?.addEventListener('click',()=>{
+    const raw=parseFloat(el('dipValue')?.dataset.raw);
+    if(Number.isFinite(raw)){
+      dipZero=raw;
+      el('dipValue').textContent='0.0°';
+      el('sensorStatus').textContent='已以目前姿態歸零';
+    }
   });
 })();
