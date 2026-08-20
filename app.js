@@ -1,5 +1,5 @@
 
-const VERSION='0804.1720';
+const VERSION='0804.1721';
 const TILE_URL='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 const LEGACY_TILE_CACHE='geolive-tiles-z15-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
@@ -543,9 +543,9 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
       await ensurePermission();
       dipMode=true;
       document.body.classList.add('dip-mode');
-      el('dipMeasureOverlay').classList.remove('hidden');
+      el('dipMeasureOverlay')?.classList.remove('hidden');
       const pn=activeProjectName();
-      el('dipBtn').querySelector('span:last-child').textContent=pn?'記錄':'傾角';
+      el('dipBtn')?.querySelector('span:last-child') && (el('dipBtn').querySelector('span:last-child').textContent=pn?'記錄':'傾角');
       el('dipMeasureStatus').textContent=pn
         ? `專案：${pn}｜即時傾角持續更新，按左下角記錄`
         : '即時傾角持續更新｜未開始專案時只測量、不儲存';
@@ -557,8 +557,8 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
   function exitDip(){
     dipMode=false;
     document.body.classList.remove('dip-mode');
-    el('dipMeasureOverlay').classList.add('hidden');
-    el('dipBtn').querySelector('span:last-child').textContent='傾角';
+    el('dipMeasureOverlay')?.classList.add('hidden');
+    el('dipBtn')?.querySelector('span:last-child') && (el('dipBtn').querySelector('span:last-child').textContent='傾角');
   }
 
   function recordDip(){
@@ -592,10 +592,7 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
   });
   el('exitDipModeBtn')?.addEventListener('click',exitDip);
 
-  el('exportDipBtn')?.addEventListener('click',()=>{
-    const rows=loadRecords();
-    if(!rows.length){toast('目前沒有傾角紀錄',3000);return}
-    // Excel-compatible UTF-8 CSV. Opens directly in Excel.
+  function exportDipRows(rows,label='GeoLive_傾角'){
     const header=['專案','時間','經度_WGS84','緯度_WGS84','EPSG3826_X','EPSG3826_Y','傾角_deg','GPS精度_m'];
     const csv=[header.join(',')].concat(rows.map(r=>[
       r.project,r.time,r.longitude,r.latitude,r.epsg3826_x,r.epsg3826_y,r.dip_deg,r.gps_accuracy_m??''
@@ -603,8 +600,20 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
     const a=document.createElement('a');
     a.href=URL.createObjectURL(blob);
-    a.download=`GeoLive_傾角_${new Date().toISOString().slice(0,10)}.csv`;
+    a.download=`${label}_${new Date().toISOString().slice(0,10)}.csv`;
     document.body.appendChild(a);a.click();a.remove();
     setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  }
+
+  el('exportDipBtn')?.addEventListener('click',()=>{
+    const all=loadRecords();
+    if(!all.length){toast('目前沒有傾角紀錄',3000);return}
+    const active=activeProjectName();
+    const rows=active ? all.filter(r=>r.project===active) : all;
+    if(!rows.length){
+      toast(active ? `專案「${active}」目前沒有傾角紀錄` : '目前沒有傾角紀錄',3000);
+      return;
+    }
+    exportDipRows(rows, active ? `${active}_傾角` : 'GeoLive_全部傾角');
   });
 })();
