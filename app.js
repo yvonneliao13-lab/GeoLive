@@ -1,5 +1,5 @@
 
-const VERSION='0804.1721';
+const VERSION='0804.1722';
 const TILE_URL='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 const LEGACY_TILE_CACHE='geolive-tiles-z15-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
@@ -455,7 +455,7 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
 
 
 
-// ===== 0804.1719 transparent dip mode + project records =====
+// ===== 0804.1722 wall-contact dip mode + project records =====
 (()=>{
   let dipMode=false;
   let permissionReady=false;
@@ -474,31 +474,39 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     );
   }
 
-  function calcDip(e){
-    const beta=Number.isFinite(e.beta)?e.beta:0;
-    const gamma=Number.isFinite(e.gamma)?e.gamma:0;
-    // Phone is used near-vertical against the bedding plane.
-    // Use the smaller angular departure from vertical as plane dip.
-    const b=Math.abs(((beta+180)%360)-180);
-    const g=Math.abs(((gamma+180)%360)-180);
-    const verticalDeparture=Math.min(Math.abs(90-b),Math.abs(90-g));
-    return Math.max(0,Math.min(90,90-verticalDeparture));
-  }
-
-  function onOrientation(e){
+  // Phone back is placed flat against the bedding/wall surface.
+  // We measure the screen's long-axis angle relative to horizontal using gravity.
+  // When the on-screen vertical reference line is parallel to the ground => 0°.
+  // When that line is vertical => 90°.
+  function onMotion(e){
     if(!dipMode)return;
-    currentDip=calcDip(e);
+    const g=e.accelerationIncludingGravity;
+    if(!g)return;
+
+    const gx=Number(g.x);
+    const gy=Number(g.y);
+    if(!Number.isFinite(gx)||!Number.isFinite(gy))return;
+
+    const mag=Math.hypot(gx,gy);
+    if(mag<1.5)return;
+
+    // 0° when gravity projects across the screen (screen long-axis horizontal),
+    // 90° when gravity projects along the screen long-axis.
+    let dip=Math.atan2(Math.abs(gy),Math.abs(gx))*180/Math.PI;
+    dip=Math.max(0,Math.min(90,dip));
+    currentDip=dip;
+
     el('dipMeasureValue').textContent=currentDip.toFixed(1)+'°';
   }
 
   async function ensurePermission(){
     if(permissionReady)return;
-    if(typeof DeviceOrientationEvent==='undefined')throw new Error('此裝置不支援傾角感測器');
-    if(typeof DeviceOrientationEvent.requestPermission==='function'){
-      const p=await DeviceOrientationEvent.requestPermission();
+    if(typeof DeviceMotionEvent==='undefined')throw new Error('此裝置不支援動作感測器');
+    if(typeof DeviceMotionEvent.requestPermission==='function'){
+      const p=await DeviceMotionEvent.requestPermission();
       if(p!=='granted')throw new Error('未允許「動作與方向」存取');
     }
-    window.addEventListener('deviceorientation',onOrientation,true);
+    window.addEventListener('devicemotion',onMotion,true);
     permissionReady=true;
   }
 
@@ -545,10 +553,13 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
       document.body.classList.add('dip-mode');
       el('dipMeasureOverlay')?.classList.remove('hidden');
       const pn=activeProjectName();
-      el('dipBtn')?.querySelector('span:last-child') && (el('dipBtn').querySelector('span:last-child').textContent=pn?'記錄':'傾角');
-      el('dipMeasureStatus').textContent=pn
-        ? `專案：${pn}｜即時傾角持續更新，按左下角記錄`
-        : '即時傾角持續更新｜未開始專案時只測量、不儲存';
+      const label=el('dipBtn')?.querySelector('span:last-child');
+      if(label)label.textContent=pn?'記錄':'傾角';
+      if(el('dipMeasureStatus')){
+        el('dipMeasureStatus').textContent=pn
+          ? `專案：${pn}｜手機背貼層面；縱線平行地面為 0°；按左下角記錄`
+          : '即時測量｜手機背貼層面；縱線平行地面為 0°；未開始專案不儲存';
+      }
     }catch(err){
       toast(err.message,5000);
     }
@@ -558,14 +569,15 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     dipMode=false;
     document.body.classList.remove('dip-mode');
     el('dipMeasureOverlay')?.classList.add('hidden');
-    el('dipBtn')?.querySelector('span:last-child') && (el('dipBtn').querySelector('span:last-child').textContent='傾角');
+    const label=el('dipBtn')?.querySelector('span:last-child');
+    if(label)label.textContent='傾角';
   }
 
   function recordDip(){
     if(!Number.isFinite(currentDip)){toast('尚未取得傾角',3000);return}
     const project=activeProjectName();
     if(!project){
-      // 未開始專案：維持透明即時傾角儀，不建立資料。
+      // No active project: live inclinometer only, do not save.
       return;
     }
     if(!latestGps){toast('尚未取得 GPS 位置',3000);return}
@@ -586,12 +598,6 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     toast(`已記錄 ${rec.dip_deg}° 到專案「${project}」`,2200);
   }
 
-  el('dipBtn')?.addEventListener('click',()=>{
-    if(dipMode)recordDip();
-    else enterDip();
-  });
-  el('exitDipModeBtn')?.addEventListener('click',exitDip);
-
   function exportDipRows(rows,label='GeoLive_傾角'){
     const header=['專案','時間','經度_WGS84','緯度_WGS84','EPSG3826_X','EPSG3826_Y','傾角_deg','GPS精度_m'];
     const csv=[header.join(',')].concat(rows.map(r=>[
@@ -604,6 +610,12 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     document.body.appendChild(a);a.click();a.remove();
     setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   }
+
+  el('dipBtn')?.addEventListener('click',()=>{
+    if(dipMode)recordDip();
+    else enterDip();
+  });
+  el('exitDipModeBtn')?.addEventListener('click',exitDip);
 
   el('exportDipBtn')?.addEventListener('click',()=>{
     const all=loadRecords();

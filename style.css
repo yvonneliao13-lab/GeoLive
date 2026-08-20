@@ -113,23 +113,28 @@ small.note{display:block;color:#666;line-height:1.45;margin-top:8px}
 #dipMeasureStatus{font-size:11px}
 .dip-crosshair{
   position:absolute;
-  left:7%;
-  right:7%;
-  top:50%;
-  height:26px;
-  transform:translateY(-50%);
+  top:12%;
+  bottom:12%;
+  left:50%;
+  width:26px;
+  transform:translateX(-50%);
 }
 .dip-crosshair-line{
   position:absolute;
-  left:0;right:0;top:50%;
-  height:2px;
+  top:0;
+  bottom:0;
+  left:50%;
+  width:2px;
+  transform:translateX(-50%);
   background:#111;
   box-shadow:0 0 0 1px #fff8;
 }
 .dip-crosshair-center{
   position:absolute;
-  left:50%;top:50%;
-  width:18px;height:18px;
+  left:50%;
+  top:50%;
+  width:18px;
+  height:18px;
   transform:translate(-50%,-50%);
   border:2px solid #111;
   border-radius:50%;
