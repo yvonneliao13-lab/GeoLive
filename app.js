@@ -1,5 +1,5 @@
 
-const VERSION='0804.1719';
+const VERSION='0804.1720';
 const TILE_URL='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 const LEGACY_TILE_CACHE='geolive-tiles-z15-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
@@ -85,8 +85,8 @@ function showLarge(url){$('#modalTitle').textContent='照片';$('#modalBody').in
 function markerForPhoto(ph){if(ph.lat==null||ph.lon==null||!ph.data)return null;const m=L.marker([ph.lat,ph.lon],{icon:photoIcon(ph.data),keyboard:false});m._photoUrl=ph.data;m.on('dblclick',()=>showLarge(ph.data));return m}
 function refreshPhotoIcons(){for(const p of state.projects.values())for(const m of p.photoMarkers)m.setIcon(photoIcon(m._photoUrl));for(const m of state.livePhotoMarkers)m.setIcon(photoIcon(m._photoUrl));declutter()}
 function declutter(){const all=[];for(const p of state.projects.values())if(p.open)all.push(...p.photoMarkers);all.push(...state.livePhotoMarkers);const occ=[];const[w,h]=zoomPhotoSize();for(const m of all){if(!map.hasLayer(m))continue;const pt=map.latLngToContainerPoint(m.getLatLng());const hit=occ.some(q=>Math.abs(q.x-pt.x)<w*.75&&Math.abs(q.y-pt.y)<h*.75);m.setOpacity(hit&&map.getZoom()<15?0:1);if(!hit)occ.push(pt)}}
-function clearLive(){if(state.liveLine)map.removeLayer(state.liveLine);state.livePhotoMarkers.forEach(m=>map.removeLayer(m));state.liveLine=null;state.livePhotoMarkers=[];state.points=[];state.photos=[];drawProfile([])}
-function updateLiveLine(){if(!state.liveLine)state.liveLine=L.polyline([],{color:'red',weight:4}).addTo(map);state.liveLine.setLatLngs(state.points.map(p=>[p[0],p[1]]));drawProfile(state.points)}
+function clearLive(){if(state.liveLine)map.removeLayer(state.liveLine);state.livePhotoMarkers.forEach(m=>map.removeLayer(m));state.liveLine=null;state.livePhotoMarkers=[];state.points=[];state.photos=[];}
+function updateLiveLine(){if(!state.liveLine)state.liveLine=L.polyline([],{color:'red',weight:4}).addTo(map);state.liveLine.setLatLngs(state.points.map(p=>[p[0],p[1]]));}
 function startWatch(){if(state.watchId!=null)return;if(!navigator.geolocation){toast('Safari 不支援 GPS');return}state.watchId=navigator.geolocation.watchPosition(pos=>{const{latitude,longitude,altitude}=pos.coords;setCoords(latitude,longitude);if(state.recording&&!state.paused){state.points.push([latitude,longitude,altitude||0]);updateLiveLine()}if(map.getZoom()<12)map.setView([latitude,longitude],16)},err=>toast('GPS 錯誤：'+err.message,5000),{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
 function stopWatch(){if(state.watchId!=null)navigator.geolocation.clearWatch(state.watchId);state.watchId=null}
 function setRecordingUI(){
@@ -103,7 +103,7 @@ async function exifGPS(file){try{if(window.exifr){const g=await exifr.gps(file);
 
 async function saveProject(obj){obj.name=safeName(obj.name);obj.updated=new Date().toISOString();await dbPut('projects',obj);return obj}
 async function loadProjects(){const list=(await dbAll('projects')).sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant'));$('#projectList').innerHTML='';for(const meta of list){const row=document.createElement('div');row.className='project-row';const b=document.createElement('button');b.className='project-name';b.textContent=meta.name;b.onclick=()=>toggleProject(meta.name);const close=document.createElement('button');close.className='mini';close.textContent=state.projects.get(meta.name)?.open?'關閉':'開啟';close.onclick=()=>toggleProject(meta.name);const menu=document.createElement('button');menu.className='mini';menu.textContent='⋮';menu.onclick=()=>projectActions(meta.name);row.append(b,close,menu);$('#projectList').append(row)}}
-async function toggleProject(name){let p=state.projects.get(name);if(p&&p.open){closeProject(name);await loadProjects();return}const meta=await dbGet('projects',name);if(!meta)return;const line=L.polyline((meta.points||[]).map(x=>[x[0],x[1]]),{color:'red',weight:4}).addTo(map);const markers=[];for(const ph of meta.photos||[]){const m=markerForPhoto(ph);if(m){m.addTo(map);markers.push(m)}}p={meta,line,photoMarkers:markers,open:true};state.projects.set(name,p);const group=L.featureGroup([line,...markers]);if(group.getBounds().isValid())map.fitBounds(group.getBounds(),{padding:[25,25]});drawProfile(meta.points||[]);refreshPhotoIcons();await loadProjects()}
+async function toggleProject(name){let p=state.projects.get(name);if(p&&p.open){closeProject(name);await loadProjects();return}const meta=await dbGet('projects',name);if(!meta)return;const line=L.polyline((meta.points||[]).map(x=>[x[0],x[1]]),{color:'red',weight:4}).addTo(map);const markers=[];for(const ph of meta.photos||[]){const m=markerForPhoto(ph);if(m){m.addTo(map);markers.push(m)}}p={meta,line,photoMarkers:markers,open:true};state.projects.set(name,p);const group=L.featureGroup([line,...markers]);if(group.getBounds().isValid())map.fitBounds(group.getBounds(),{padding:[25,25]});;refreshPhotoIcons();await loadProjects()}
 function closeProject(name){const p=state.projects.get(name);if(!p)return;map.removeLayer(p.line);p.photoMarkers.forEach(m=>map.removeLayer(m));p.open=false}
 async function projectActions(name){openModal('專案管理',`<button class="wide" id="pDownload">下載 GPX＋KMZ＋SHP＋照片 ZIP</button><button class="wide" id="pRename">重新命名</button><button class="wide" id="pClose">關閉顯示</button><button class="wide danger" id="pDelete">刪除全部資料</button>`);$('#pDownload').onclick=()=>exportProject(name);$('#pRename').onclick=async()=>{const nn=prompt('新名稱',name);if(!nn||nn===name)return;const obj=await dbGet('projects',name);if(await dbGet('projects',safeName(nn))){toast('新名稱已存在');return}await dbDel('projects',name);obj.name=safeName(nn);await saveProject(obj);closeProject(name);state.projects.delete(name);$('#modal').classList.add('hidden');await loadProjects()};$('#pClose').onclick=async()=>{closeProject(name);$('#modal').classList.add('hidden');await loadProjects()};$('#pDelete').onclick=async()=>{if(!confirm(`確定刪除 ${name} 的所有資料？`))return;closeProject(name);state.projects.delete(name);await dbDel('projects',name);$('#modal').classList.add('hidden');await loadProjects();toast('已完整刪除專案')}}
 
@@ -449,7 +449,7 @@ $('#simulateOffline').onchange=e=>{if(e.target.checked)alert('請從 iPhone 右�
 
 $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawer').onclick=()=>$('#drawer').classList.add('hidden');
 
-(async()=>{try{initMap();await migrateOfflineCache1716();await loadProjects();startWatch();updateNetwork();drawProfile([])}catch(e){toast('初始化失敗：'+e.message,5000)}})();
+(async()=>{try{initMap();await migrateOfflineCache1716();await loadProjects();startWatch();updateNetwork();}catch(e){toast('初始化失敗：'+e.message,5000)}})();
 
 
 
@@ -502,8 +502,9 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     permissionReady=true;
   }
 
-  function projectName(){
-    return state?.project?.name || state?.currentProject?.name || '未命名專案';
+  function activeProjectName(){
+    if(state?.current?.recording) return state.current.name || '';
+    return '';
   }
 
   // WGS84 -> TWD97 / TM2 zone 121 (EPSG:3826)
@@ -543,8 +544,11 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
       dipMode=true;
       document.body.classList.add('dip-mode');
       el('dipMeasureOverlay').classList.remove('hidden');
-      el('dipBtn').querySelector('span:last-child').textContent='記錄';
-      el('dipMeasureStatus').textContent='對準層面水平線，再按左下角「記錄」';
+      const pn=activeProjectName();
+      el('dipBtn').querySelector('span:last-child').textContent=pn?'記錄':'傾角';
+      el('dipMeasureStatus').textContent=pn
+        ? `專案：${pn}｜即時傾角持續更新，按左下角記錄`
+        : '即時傾角持續更新｜未開始專案時只測量、不儲存';
     }catch(err){
       toast(err.message,5000);
     }
@@ -559,10 +563,15 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
 
   function recordDip(){
     if(!Number.isFinite(currentDip)){toast('尚未取得傾角',3000);return}
+    const project=activeProjectName();
+    if(!project){
+      // 未開始專案：維持透明即時傾角儀，不建立資料。
+      return;
+    }
     if(!latestGps){toast('尚未取得 GPS 位置',3000);return}
     const tm=wgs84To3826(latestGps.lon,latestGps.lat);
     const rec={
-      project:projectName(),
+      project,
       time:new Date().toISOString(),
       longitude:Number(latestGps.lon.toFixed(7)),
       latitude:Number(latestGps.lat.toFixed(7)),
@@ -574,7 +583,7 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     const records=loadRecords();
     records.push(rec);
     saveRecords(records);
-    toast(`已記錄傾角 ${rec.dip_deg}°`,2500);
+    toast(`已記錄 ${rec.dip_deg}° 到專案「${project}」`,2200);
   }
 
   el('dipBtn')?.addEventListener('click',()=>{
