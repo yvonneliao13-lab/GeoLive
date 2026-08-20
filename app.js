@@ -1,11 +1,11 @@
 
-const VERSION='0804.1722';
+const VERSION='0804.1723';
 const TILE_URL='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 const LEGACY_TILE_CACHE='geolive-tiles-z15-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
 const DB_NAME='GeoLiveFullPWA1348', DB_VERSION=3;
 const $=s=>document.querySelector(s);
-const state={recording:false,paused:false,watchId:null,points:[],photos:[],liveLine:null,livePhotoMarkers:[],projects:new Map(),offlineLayers:new Map()};
+const state={recording:false,paused:false,watchId:null,points:[],photos:[],dipRecords:[],liveLine:null,livePhotoMarkers:[],projects:new Map(),offlineLayers:new Map()};
 let map, onlineLayer;
 
 function toast(msg,ms=2600){const t=$('#toast');t.textContent=msg;t.classList.remove('hidden');clearTimeout(t._to);t._to=setTimeout(()=>t.classList.add('hidden'),ms)}
@@ -105,7 +105,48 @@ async function saveProject(obj){obj.name=safeName(obj.name);obj.updated=new Date
 async function loadProjects(){const list=(await dbAll('projects')).sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant'));$('#projectList').innerHTML='';for(const meta of list){const row=document.createElement('div');row.className='project-row';const b=document.createElement('button');b.className='project-name';b.textContent=meta.name;b.onclick=()=>toggleProject(meta.name);const close=document.createElement('button');close.className='mini';close.textContent=state.projects.get(meta.name)?.open?'關閉':'開啟';close.onclick=()=>toggleProject(meta.name);const menu=document.createElement('button');menu.className='mini';menu.textContent='⋮';menu.onclick=()=>projectActions(meta.name);row.append(b,close,menu);$('#projectList').append(row)}}
 async function toggleProject(name){let p=state.projects.get(name);if(p&&p.open){closeProject(name);await loadProjects();return}const meta=await dbGet('projects',name);if(!meta)return;const line=L.polyline((meta.points||[]).map(x=>[x[0],x[1]]),{color:'red',weight:4}).addTo(map);const markers=[];for(const ph of meta.photos||[]){const m=markerForPhoto(ph);if(m){m.addTo(map);markers.push(m)}}p={meta,line,photoMarkers:markers,open:true};state.projects.set(name,p);const group=L.featureGroup([line,...markers]);if(group.getBounds().isValid())map.fitBounds(group.getBounds(),{padding:[25,25]});;refreshPhotoIcons();await loadProjects()}
 function closeProject(name){const p=state.projects.get(name);if(!p)return;map.removeLayer(p.line);p.photoMarkers.forEach(m=>map.removeLayer(m));p.open=false}
-async function projectActions(name){openModal('專案管理',`<button class="wide" id="pDownload">下載 GPX＋KMZ＋SHP＋照片 ZIP</button><button class="wide" id="pRename">重新命名</button><button class="wide" id="pClose">關閉顯示</button><button class="wide danger" id="pDelete">刪除全部資料</button>`);$('#pDownload').onclick=()=>exportProject(name);$('#pRename').onclick=async()=>{const nn=prompt('新名稱',name);if(!nn||nn===name)return;const obj=await dbGet('projects',name);if(await dbGet('projects',safeName(nn))){toast('新名稱已存在');return}await dbDel('projects',name);obj.name=safeName(nn);await saveProject(obj);closeProject(name);state.projects.delete(name);$('#modal').classList.add('hidden');await loadProjects()};$('#pClose').onclick=async()=>{closeProject(name);$('#modal').classList.add('hidden');await loadProjects()};$('#pDelete').onclick=async()=>{if(!confirm(`確定刪除 ${name} 的所有資料？`))return;closeProject(name);state.projects.delete(name);await dbDel('projects',name);$('#modal').classList.add('hidden');await loadProjects();toast('已完整刪除專案')}}
+
+function xmlEsc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+async function dipXlsxBlob(rows){
+  const x=new JSZip();
+  x.file('[Content_Types].xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>`);
+  x.folder('_rels').file('.rels',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`);
+  x.folder('xl').file('workbook.xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="傾角資料" sheetId="1" r:id="rId1"/></sheets></workbook>`);
+  x.folder('xl').folder('_rels').file('workbook.xml.rels',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`);
+
+  const header=['時間','經度_WGS84','緯度_WGS84','EPSG3826_X','EPSG3826_Y','傾角_deg','GPS精度_m'];
+  const all=[header,...rows.map(r=>[
+    r.time,r.longitude,r.latitude,r.epsg3826_x,r.epsg3826_y,r.dip_deg,r.gps_accuracy_m??''
+  ])];
+  const cols='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const rowXml=all.map((row,ri)=>{
+    const cells=row.map((v,ci)=>{
+      const ref=`${cols[ci]}${ri+1}`;
+      if(typeof v==='number'&&Number.isFinite(v))return `<c r="${ref}"><v>${v}</v></c>`;
+      return `<c r="${ref}" t="inlineStr"><is><t>${xmlEsc(v)}</t></is></c>`;
+    }).join('');
+    return `<row r="${ri+1}">${cells}</row>`;
+  }).join('');
+  x.folder('xl').folder('worksheets').file('sheet1.xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowXml}</sheetData></worksheet>`);
+  return await x.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+
+async function projectActions(name){openModal('專案管理',`<button class="wide" id="pDownload">下載完整專案 ZIP（GPX＋KMZ＋JPG＋Excel）</button><button class="wide" id="pRename">重新命名</button><button class="wide" id="pClose">關閉顯示</button><button class="wide danger" id="pDelete">刪除全部資料</button>`);$('#pDownload').onclick=()=>exportProject(name);$('#pRename').onclick=async()=>{const nn=prompt('新名稱',name);if(!nn||nn===name)return;const obj=await dbGet('projects',name);if(await dbGet('projects',safeName(nn))){toast('新名稱已存在');return}await dbDel('projects',name);obj.name=safeName(nn);await saveProject(obj);closeProject(name);state.projects.delete(name);$('#modal').classList.add('hidden');await loadProjects()};$('#pClose').onclick=async()=>{closeProject(name);$('#modal').classList.add('hidden');await loadProjects()};$('#pDelete').onclick=async()=>{if(!confirm(`確定刪除 ${name} 的所有資料？`))return;closeProject(name);state.projects.delete(name);await dbDel('projects',name);$('#modal').classList.add('hidden');await loadProjects();toast('已完整刪除專案')}}
 
 function gpxText(points){return `<?xml version="1.0" encoding="UTF-8"?><gpx version="1.1" creator="GeoLive 0804.1348" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>GeoLive</name><trkseg>${points.map(p=>`<trkpt lat="${p[0]}" lon="${p[1]}"><ele>${p[2]||0}</ele></trkpt>`).join('')}</trkseg></trk></gpx>`}
 function kmlText(points,photos){const coords=points.map(p=>`${p[1]},${p[0]},${p[2]||0}`).join(' ');const marks=photos.filter(p=>p.lat!=null).map((p,i)=>`<Placemark><name>${esc(p.name||'photo')}</name><Point><coordinates>${p.lon},${p.lat},${p.alt||0}</coordinates></Point></Placemark>`).join('');return `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><name>Route</name><Style><LineStyle><color>ff0000ff</color><width>4</width></LineStyle></Style><LineString><coordinates>${coords}</coordinates></LineString></Placemark>${marks}</Document></kml>`}
@@ -115,7 +156,48 @@ function f64(v){const b=new ArrayBuffer(8);new DataView(b).setFloat64(0,v,true);
 function makePolylineShp(points){const pts=points.map(p=>[+p[1],+p[0]]);const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);const xmin=Math.min(...xs),ymin=Math.min(...ys),xmax=Math.max(...xs),ymax=Math.max(...ys);const recBytes=4+32+4+4+4+pts.length*16;const fileBytes=100+8+recBytes;let a=[];a.push(...be32(9994),...Array(20).fill(0),...be32(fileBytes/2),...le32(1000),...le32(3),...f64(xmin),...f64(ymin),...f64(xmax),...f64(ymax),...Array(32).fill(0));a.push(...be32(1),...be32(recBytes/2),...le32(3),...f64(xmin),...f64(ymin),...f64(xmax),...f64(ymax),...le32(1),...le32(pts.length),...le32(0));for(const p of pts)a.push(...f64(p[0]),...f64(p[1]));return new Uint8Array(a)}
 function makeShx(points){const xs=points.map(p=>+p[1]),ys=points.map(p=>+p[0]);const xmin=Math.min(...xs),ymin=Math.min(...ys),xmax=Math.max(...xs),ymax=Math.max(...ys);const recBytes=4+32+4+4+4+points.length*16;let a=[];a.push(...be32(9994),...Array(20).fill(0),...be32(54),...le32(1000),...le32(3),...f64(xmin),...f64(ymin),...f64(xmax),...f64(ymax),...Array(32).fill(0),...be32(50),...be32(recBytes/2));return new Uint8Array(a)}
 function makeDbf(name){const enc=new TextEncoder();const fieldLen=80,headerLen=65,recLen=81,total=headerLen+recLen+1;const b=new Uint8Array(total);const d=new Date();b[0]=3;b[1]=d.getFullYear()-1900;b[2]=d.getMonth()+1;b[3]=d.getDate();b.set(le32(1),4);b.set(le16(headerLen),8);b.set(le16(recLen),10);b.set(enc.encode('NAME'),32);b[43]='C'.charCodeAt(0);b[48]=fieldLen;b[64]=13;b[65]=32;const txt=enc.encode(String(name).slice(0,fieldLen));b.set(txt,66);b[total-1]=26;return b}
-async function exportProject(name){if(!window.JSZip){toast('ZIP 套件尚未載入，請先連網重開一次');return}const p=await dbGet('projects',name),zip=new JSZip();zip.file('route.gpx',gpxText(p.points||[]));const kml=kmlText(p.points||[],p.photos||[]);const kmz=new JSZip();kmz.file('doc.kml',kml);zip.file('route.kmz',await kmz.generateAsync({type:'blob'}));if((p.points||[]).length>=2){zip.file('route.shp',makePolylineShp(p.points));zip.file('route.shx',makeShx(p.points));zip.file('route.dbf',makeDbf(p.name));zip.file('route.prj','GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]]')}let i=1;for(const ph of p.photos||[]){if(!ph.data)continue;const blob=dataURLBlob(ph.data),ext=blob.type.includes('png')?'png':blob.type.includes('webp')?'webp':'jpg';zip.file(`photos/${String(i).padStart(3,'0')}_${safeName(ph.name||'photo')}.${ext}`,blob);i++}zip.file('project.json',JSON.stringify(p,null,2));const blob=await zip.generateAsync({type:'blob'});downloadBlob(blob,`${safeName(name)}.zip`);toast('已建立完整專案 ZIP')}
+async function exportProject(name){
+  if(!window.JSZip){toast('ZIP 套件尚未載入，請先連網重開一次');return}
+  const p=await dbGet('projects',name);
+  if(!p){toast('找不到專案');return}
+
+  const zip=new JSZip();
+  const projectBase=safeName(name);
+
+  // 1. GPX route
+  zip.file(`${projectBase}.gpx`,gpxText(p.points||[]));
+
+  // 2. KMZ route + photo placemarks
+  const kmz=new JSZip();
+  kmz.file('doc.kml',kmlText(p.points||[],p.photos||[]));
+  let kmzPhotoIndex=1;
+  for(const ph of p.photos||[]){
+    if(!ph.data)continue;
+    const blob=dataURLBlob(ph.data);
+    const ext=blob.type.includes('png')?'png':blob.type.includes('webp')?'webp':'jpg';
+    kmz.folder('photos').file(`${String(kmzPhotoIndex).padStart(3,'0')}_${safeName(ph.name||'photo')}.${ext}`,blob);
+    kmzPhotoIndex++;
+  }
+  zip.file(`${projectBase}.kmz`,await kmz.generateAsync({type:'blob'}));
+
+  // 3. JPG/photo originals in one folder
+  let photoIndex=1;
+  for(const ph of p.photos||[]){
+    if(!ph.data)continue;
+    const blob=dataURLBlob(ph.data);
+    const ext=blob.type.includes('png')?'png':blob.type.includes('webp')?'webp':'jpg';
+    zip.file(`JPG/${String(photoIndex).padStart(3,'0')}_${safeName(ph.name||'photo')}.${ext}`,blob);
+    photoIndex++;
+  }
+
+  // 4. Excel: WGS84 lon/lat, EPSG:3826 X/Y, integer dip
+  const xlsx=await dipXlsxBlob(p.dips||[]);
+  zip.file(`${projectBase}_傾角.xlsx`,xlsx);
+
+  const blob=await zip.generateAsync({type:'blob'});
+  downloadBlob(blob,`${projectBase}.zip`);
+  toast('已下載完整專案：GPX＋KMZ＋JPG＋Excel');
+}
 function downloadBlob(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),3000)}
 
 function tileXY(lat,lon,z){const n=2**z,x=Math.floor((lon+180)/360*n),lr=lat*Math.PI/180,y=Math.floor((1-Math.asinh(Math.tan(lr))/Math.PI)/2*n);return[x,y]}
@@ -375,8 +457,8 @@ const DISTRICTS={
 function openModal(title,html){$('#modalTitle').textContent=title;$('#modalBody').innerHTML=html;$('#modal').classList.remove('hidden')}
 $('#modalClose').onclick=()=>$('#modal').classList.add('hidden');$('#modal').onclick=e=>{if(e.target===$('#modal'))$('#modal').classList.add('hidden')};
 
-$('#mainBtn').onclick=()=>{if(!state.recording){clearLive();state.recording=true;state.paused=false;startWatch();toast('開始記錄')}else{state.paused=!state.paused;toast(state.paused?'已暫停':'繼續記錄')}setRecordingUI()};
-$('#finishBtn').onclick=async()=>{state.recording=false;state.paused=false;stopWatch();setRecordingUI();const d=new Date(),def=d.toISOString().slice(0,19).replace(/[-:T]/g,'')+'_位置';const name=prompt('專案名稱',def)||def;await saveProject({name,points:state.points,photos:state.photos});clearLive();await loadProjects();toast('專案已儲存於 iPhone')};
+$('#mainBtn').onclick=()=>{if(!state.recording){clearLive();state.dipRecords=[];state.recording=true;state.paused=false;startWatch();toast('開始記錄')}else{state.paused=!state.paused;toast(state.paused?'已暫停':'繼續記錄')}setRecordingUI()};
+$('#finishBtn').onclick=async()=>{state.recording=false;state.paused=false;stopWatch();setRecordingUI();const d=new Date(),def=d.toISOString().slice(0,19).replace(/[-:T]/g,'')+'_位置';const name=prompt('專案名稱',def)||def;await saveProject({name,points:state.points,photos:state.photos,dips:state.dipRecords});clearLive();state.dipRecords=[];await loadProjects();toast('專案已儲存於 iPhone')};
 $('#cameraInput').onchange=async e=>{const f=e.target.files[0];if(!f)return;navigator.geolocation.getCurrentPosition(async pos=>{const data=await fileDataURL(f),{latitude,longitude,altitude}=pos.coords;const ph={name:f.name,data,lat:latitude,lon:longitude,alt:altitude||0};state.photos.push(ph);const m=markerForPhoto(ph);if(m){m.addTo(map);state.livePhotoMarkers.push(m)}e.target.value='';toast('照片已加入')},err=>toast('拍照定位失敗：'+err.message),{enableHighAccuracy:true})};
 
 $('#importBtn').onclick=()=>$('#folderInput').click();
@@ -496,7 +578,7 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     dip=Math.max(0,Math.min(90,dip));
     currentDip=dip;
 
-    el('dipMeasureValue').textContent=currentDip.toFixed(1)+'°';
+    el('dipMeasureValue').textContent=Math.round(currentDip)+'°';
   }
 
   async function ensurePermission(){
@@ -541,10 +623,6 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     return {x:X,y:Y};
   }
 
-  function loadRecords(){
-    try{return JSON.parse(localStorage.getItem(DIP_STORE_KEY)||'[]')}catch{return []}
-  }
-  function saveRecords(r){localStorage.setItem(DIP_STORE_KEY,JSON.stringify(r))}
 
   async function enterDip(){
     try{
@@ -552,13 +630,12 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
       dipMode=true;
       document.body.classList.add('dip-mode');
       el('dipMeasureOverlay')?.classList.remove('hidden');
-      const pn=activeProjectName();
       const label=el('dipBtn')?.querySelector('span:last-child');
-      if(label)label.textContent=pn?'記錄':'傾角';
+      if(label)label.textContent=state.recording?'記錄':'傾角';
       if(el('dipMeasureStatus')){
-        el('dipMeasureStatus').textContent=pn
-          ? `專案：${pn}｜手機背貼層面；縱線平行地面為 0°；按左下角記錄`
-          : '即時測量｜手機背貼層面；縱線平行地面為 0°；未開始專案不儲存';
+        el('dipMeasureStatus').textContent=state.recording
+          ? '專案記錄中｜傾角持續更新，按左下角「記錄」保存當下傾角與位置'
+          : '即時傾角模式｜傾角持續更新；未開始專案時不儲存';
       }
     }catch(err){
       toast(err.message,5000);
@@ -575,41 +652,25 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
 
   function recordDip(){
     if(!Number.isFinite(currentDip)){toast('尚未取得傾角',3000);return}
-    const project=activeProjectName();
-    if(!project){
-      // No active project: live inclinometer only, do not save.
-      return;
-    }
+
+    // 沒有開始 GPS 專案：只當即時傾角儀，不建立資料。
+    if(!state.recording)return;
+
     if(!latestGps){toast('尚未取得 GPS 位置',3000);return}
     const tm=wgs84To3826(latestGps.lon,latestGps.lat);
     const rec={
-      project,
       time:new Date().toISOString(),
       longitude:Number(latestGps.lon.toFixed(7)),
       latitude:Number(latestGps.lat.toFixed(7)),
       epsg3826_x:Number(tm.x.toFixed(3)),
       epsg3826_y:Number(tm.y.toFixed(3)),
-      dip_deg:Number(currentDip.toFixed(1)),
+      dip_deg:Math.round(currentDip),
       gps_accuracy_m:Number.isFinite(latestGps.accuracy)?Number(latestGps.accuracy.toFixed(1)):null
     };
-    const records=loadRecords();
-    records.push(rec);
-    saveRecords(records);
-    toast(`已記錄 ${rec.dip_deg}° 到專案「${project}」`,2200);
+    state.dipRecords.push(rec);
+    toast(`已記錄傾角 ${rec.dip_deg}°`,2200);
   }
 
-  function exportDipRows(rows,label='GeoLive_傾角'){
-    const header=['專案','時間','經度_WGS84','緯度_WGS84','EPSG3826_X','EPSG3826_Y','傾角_deg','GPS精度_m'];
-    const csv=[header.join(',')].concat(rows.map(r=>[
-      r.project,r.time,r.longitude,r.latitude,r.epsg3826_x,r.epsg3826_y,r.dip_deg,r.gps_accuracy_m??''
-    ].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','))).join('\r\n');
-    const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
-    const a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);
-    a.download=`${label}_${new Date().toISOString().slice(0,10)}.csv`;
-    document.body.appendChild(a);a.click();a.remove();
-    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-  }
 
   el('dipBtn')?.addEventListener('click',()=>{
     if(dipMode)recordDip();
@@ -617,15 +678,4 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
   });
   el('exitDipModeBtn')?.addEventListener('click',exitDip);
 
-  el('exportDipBtn')?.addEventListener('click',()=>{
-    const all=loadRecords();
-    if(!all.length){toast('目前沒有傾角紀錄',3000);return}
-    const active=activeProjectName();
-    const rows=active ? all.filter(r=>r.project===active) : all;
-    if(!rows.length){
-      toast(active ? `專案「${active}」目前沒有傾角紀錄` : '目前沒有傾角紀錄',3000);
-      return;
-    }
-    exportDipRows(rows, active ? `${active}_傾角` : 'GeoLive_全部傾角');
-  });
 })();

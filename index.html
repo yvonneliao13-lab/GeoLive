@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>GeoLive 0804.1722</title>
+<title>GeoLive 0804.1723</title>
 <meta name="theme-color" content="#0e2730">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -11,7 +11,7 @@
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./icon-180.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="./style.css?v=1722">
+<link rel="stylesheet" href="./style.css?v=1723">
 </head>
 <body>
 <div id="app">
@@ -21,12 +21,11 @@
   <div id="networkBadge">網路檢查中</div>
 
   <aside id="drawer" class="panel hidden">
-    <div class="panel-head"><b>GeoLive 0804.1722</b><button id="closeDrawer">×</button></div>
+    <div class="panel-head"><b>GeoLive 0804.1723</b><button id="closeDrawer">×</button></div>
     <button id="importBtn" class="wide">匯入專案資料夾</button>
     <input id="folderInput" type="file" multiple accept=".gpx,image/*" hidden>
     <button id="offlineDownloadBtn" class="wide">下載離線地圖</button>
     <button id="offlineManageBtn" class="wide">管理離線地圖</button>
-    <button id="exportDipBtn" class="wide">匯出傾角 Excel</button>
     <label class="offline-test"><input id="simulateOffline" type="checkbox"> 模擬離線（真實飛航模式）</label>
     <h3>現有專案</h3>
     <div id="projectList" class="scroll-list"></div>
@@ -61,9 +60,9 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://unpkg.com/exifr/dist/full.umd.js"></script>
-<script src="./app.js?v=1722"></script>
+<script src="./app.js?v=1723"></script>
 <script>
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=1722');
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=1723');
 </script>
 
 
