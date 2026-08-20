@@ -1,5 +1,5 @@
 
-const VERSION='0804.1717';
+const VERSION='0804.1718';
 const TILE_URL='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 const LEGACY_TILE_CACHE='geolive-tiles-z15-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
@@ -74,8 +74,8 @@ async function adminOptionsFromBoundary(){
 
 
 function initMap(){
- map=L.map('map',{zoomControl:true}).setView([23.7,121],7);
- onlineLayer=L.tileLayer(TILE_URL,{maxZoom:15,maxNativeZoom:15,attribution:'內政部國土測繪中心 NLSC'}).addTo(map);
+ map=L.map('map',{zoomControl:true,maxZoom:22}).setView([23.7,121],7);
+ onlineLayer=L.tileLayer(TILE_URL,{maxNativeZoom:15,maxZoom:22,attribution:'內政部國土測繪中心 NLSC'}).addTo(map);
  map.on('zoomend moveend',refreshPhotoIcons);
 }
 function setCoords(lat,lon){$('#coords').textContent=`${lat.toFixed(6)}, ${lon.toFixed(6)}`}
@@ -372,7 +372,8 @@ async function toggleOffline(id){
 
   const l=new CachedRegionLayer(m,{
     minZoom:m.min_zoom??12,
-    maxZoom:m.max_zoom??15,
+    maxNativeZoom:m.max_zoom??15,
+    maxZoom:22,
     bounds:[[m.bounds[1],m.bounds[0]],[m.bounds[3],m.bounds[2]]],
     keepBuffer:2
   }).addTo(map);
