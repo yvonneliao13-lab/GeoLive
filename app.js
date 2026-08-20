@@ -1,5 +1,5 @@
 
-const VERSION='0804.1718';
+const VERSION='0804.1719';
 const TILE_URL='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 const LEGACY_TILE_CACHE='geolive-tiles-z15-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
@@ -85,62 +85,6 @@ function showLarge(url){$('#modalTitle').textContent='照片';$('#modalBody').in
 function markerForPhoto(ph){if(ph.lat==null||ph.lon==null||!ph.data)return null;const m=L.marker([ph.lat,ph.lon],{icon:photoIcon(ph.data),keyboard:false});m._photoUrl=ph.data;m.on('dblclick',()=>showLarge(ph.data));return m}
 function refreshPhotoIcons(){for(const p of state.projects.values())for(const m of p.photoMarkers)m.setIcon(photoIcon(m._photoUrl));for(const m of state.livePhotoMarkers)m.setIcon(photoIcon(m._photoUrl));declutter()}
 function declutter(){const all=[];for(const p of state.projects.values())if(p.open)all.push(...p.photoMarkers);all.push(...state.livePhotoMarkers);const occ=[];const[w,h]=zoomPhotoSize();for(const m of all){if(!map.hasLayer(m))continue;const pt=map.latLngToContainerPoint(m.getLatLng());const hit=occ.some(q=>Math.abs(q.x-pt.x)<w*.75&&Math.abs(q.y-pt.y)<h*.75);m.setOpacity(hit&&map.getZoom()<15?0:1);if(!hit)occ.push(pt)}}
-function haversineMeters(a,b){
-  const R=6371000;
-  const rad=v=>v*Math.PI/180;
-  const dLat=rad(b[0]-a[0]),dLon=rad(b[1]-a[1]);
-  const la1=rad(a[0]),la2=rad(b[0]);
-  const h=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
-  return 2*R*Math.asin(Math.sqrt(h));
-}
-function drawProfile(points){
-  const c=$('#profileCanvas'),ctx=c.getContext('2d');
-  const W=c.width,H=c.height;
-  ctx.clearRect(0,0,W,H);
-  ctx.font='11px -apple-system, sans-serif';
-  ctx.fillStyle='#333';
-
-  const valid=(points||[]).filter(p=>Number.isFinite(Number(p[0]))&&Number.isFinite(Number(p[1]))&&Number.isFinite(Number(p[2])));
-  if(valid.length<2){
-    ctx.fillText('尚無足夠的 GPS 高度資料',10,18);
-    return;
-  }
-
-  const d=[0];
-  for(let i=1;i<valid.length;i++)d.push(d[i-1]+haversineMeters(valid[i-1],valid[i]));
-  const elev=valid.map(p=>Number(p[2]));
-  const total=d[d.length-1];
-  const mn=Math.min(...elev),mx=Math.max(...elev),range=Math.max(1,mx-mn);
-
-  const L=42,R=8,T=10,B=24,pw=W-L-R,ph=H-T-B;
-  ctx.strokeStyle='#aaa';
-  ctx.lineWidth=1;
-  ctx.beginPath();ctx.moveTo(L,T);ctx.lineTo(L,H-B);ctx.lineTo(W-R,H-B);ctx.stroke();
-
-  ctx.fillStyle='#555';
-  ctx.fillText(`${mx.toFixed(0)}m`,2,T+5);
-  ctx.fillText(`${mn.toFixed(0)}m`,2,H-B+3);
-
-  const distLabel=total>=1000?`${(total/1000).toFixed(2)} km`:`${Math.round(total)} m`;
-  ctx.fillText('0',L-2,H-6);
-  const tw=ctx.measureText(distLabel).width;
-  ctx.fillText(distLabel,W-R-tw,H-6);
-
-  ctx.strokeStyle='#111';
-  ctx.lineWidth=2;
-  ctx.beginPath();
-  elev.forEach((v,i)=>{
-    const px=L+(total>0?d[i]/total:0)*pw;
-    const py=T+ph-(v-mn)/range*ph;
-    if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
-  });
-  ctx.stroke();
-
-  ctx.fillStyle='#333';
-  const label='距離';
-  const lw=ctx.measureText(label).width;
-  ctx.fillText(label,L+(pw-lw)/2,H-6);
-}
 function clearLive(){if(state.liveLine)map.removeLayer(state.liveLine);state.livePhotoMarkers.forEach(m=>map.removeLayer(m));state.liveLine=null;state.livePhotoMarkers=[];state.points=[];state.photos=[];drawProfile([])}
 function updateLiveLine(){if(!state.liveLine)state.liveLine=L.polyline([],{color:'red',weight:4}).addTo(map);state.liveLine.setLatLngs(state.points.map(p=>[p[0],p[1]]));drawProfile(state.points)}
 function startWatch(){if(state.watchId!=null)return;if(!navigator.geolocation){toast('Safari 不支援 GPS');return}state.watchId=navigator.geolocation.watchPosition(pos=>{const{latitude,longitude,altitude}=pos.coords;setCoords(latitude,longitude);if(state.recording&&!state.paused){state.points.push([latitude,longitude,altitude||0]);updateLiveLine()}if(map.getZoom()<12)map.setView([latitude,longitude],16)},err=>toast('GPS 錯誤：'+err.message,5000),{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
@@ -509,35 +453,45 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
 
 
 
-// ===== 0804.1717 dip measurement =====
+
+
+// ===== 0804.1719 transparent dip mode + project records =====
 (()=>{
-  let dipZero=0;
-  let dipStarted=false;
+  let dipMode=false;
   let permissionReady=false;
+  let currentDip=null;
+  let latestGps=null;
+  const DIP_STORE_KEY='geolive_dip_records_v1';
 
-  function el(id){return document.getElementById(id)}
-  function onOrientation(e){
-    if(!dipStarted)return;
-    const beta=Number.isFinite(e.beta)?e.beta:0;
-    const gamma=Number.isFinite(e.gamma)?e.gamma:0;
+  const el=id=>document.getElementById(id);
 
-    let tilt=Math.atan(Math.sqrt(
-      Math.tan(beta*Math.PI/180)**2+
-      Math.tan(gamma*Math.PI/180)**2
-    ))*180/Math.PI;
-    tilt=Math.max(0,Math.min(90,tilt));
-
-    const shown=Math.max(0,Math.min(90,tilt-dipZero));
-    el('dipValue').textContent=shown.toFixed(1)+'°';
-    el('dipValue').dataset.raw=tilt.toString();
-
-    const dominant=Math.abs(beta)>=Math.abs(gamma)
-      ?(beta>=0?'手機上端較高':'手機上端較低')
-      :(gamma>=0?'手機右側較高':'手機左側較高');
-    el('dipDirection').textContent=dominant;
+  // Track latest GPS without changing map viewport.
+  if(navigator.geolocation){
+    navigator.geolocation.watchPosition(
+      p=>{ latestGps={lat:p.coords.latitude,lon:p.coords.longitude,accuracy:p.coords.accuracy,time:p.timestamp}; },
+      ()=>{},
+      {enableHighAccuracy:true,maximumAge:3000,timeout:15000}
+    );
   }
 
-  async function ensureMotionPermission(){
+  function calcDip(e){
+    const beta=Number.isFinite(e.beta)?e.beta:0;
+    const gamma=Number.isFinite(e.gamma)?e.gamma:0;
+    // Phone is used near-vertical against the bedding plane.
+    // Use the smaller angular departure from vertical as plane dip.
+    const b=Math.abs(((beta+180)%360)-180);
+    const g=Math.abs(((gamma+180)%360)-180);
+    const verticalDeparture=Math.min(Math.abs(90-b),Math.abs(90-g));
+    return Math.max(0,Math.min(90,90-verticalDeparture));
+  }
+
+  function onOrientation(e){
+    if(!dipMode)return;
+    currentDip=calcDip(e);
+    el('dipMeasureValue').textContent=currentDip.toFixed(1)+'°';
+  }
+
+  async function ensurePermission(){
     if(permissionReady)return;
     if(typeof DeviceOrientationEvent==='undefined')throw new Error('此裝置不支援傾角感測器');
     if(typeof DeviceOrientationEvent.requestPermission==='function'){
@@ -548,30 +502,100 @@ $('#menuBtn').onclick=()=>$('#drawer').classList.toggle('hidden');$('#closeDrawe
     permissionReady=true;
   }
 
-  el('dipBtn')?.addEventListener('click',()=>{
-    el('dipModal')?.classList.remove('hidden');
-  });
-  el('dipClose')?.addEventListener('click',()=>{
-    el('dipModal')?.classList.add('hidden');
-  });
-  el('dipModal')?.addEventListener('click',e=>{
-    if(e.target===el('dipModal'))el('dipModal').classList.add('hidden');
-  });
-  el('startDipBtn')?.addEventListener('click',async()=>{
+  function projectName(){
+    return state?.project?.name || state?.currentProject?.name || '未命名專案';
+  }
+
+  // WGS84 -> TWD97 / TM2 zone 121 (EPSG:3826)
+  function wgs84To3826(lon,lat){
+    const a=6378137.0;
+    const f=1/298.257222101;
+    const k0=0.9999;
+    const lon0=121*Math.PI/180;
+    const x0=250000;
+    const y0=0;
+    const e2=2*f-f*f;
+    const ep2=e2/(1-e2);
+    const phi=lat*Math.PI/180;
+    const lam=lon*Math.PI/180;
+    const N=a/Math.sqrt(1-e2*Math.sin(phi)**2);
+    const T=Math.tan(phi)**2;
+    const C=ep2*Math.cos(phi)**2;
+    const A=(lam-lon0)*Math.cos(phi);
+    const e4=e2*e2,e6=e4*e2;
+    const M=a*((1-e2/4-3*e4/64-5*e6/256)*phi
+      -(3*e2/8+3*e4/32+45*e6/1024)*Math.sin(2*phi)
+      +(15*e4/256+45*e6/1024)*Math.sin(4*phi)
+      -(35*e6/3072)*Math.sin(6*phi));
+    const X=x0+k0*N*(A+(1-T+C)*A**3/6+(5-18*T+T*T+72*C-58*ep2)*A**5/120);
+    const Y=y0+k0*(M+N*Math.tan(phi)*(A*A/2+(5-T+9*C+4*C*C)*A**4/24+(61-58*T+T*T+600*C-330*ep2)*A**6/720));
+    return {x:X,y:Y};
+  }
+
+  function loadRecords(){
+    try{return JSON.parse(localStorage.getItem(DIP_STORE_KEY)||'[]')}catch{return []}
+  }
+  function saveRecords(r){localStorage.setItem(DIP_STORE_KEY,JSON.stringify(r))}
+
+  async function enterDip(){
     try{
-      await ensureMotionPermission();
-      dipStarted=true;
-      el('sensorStatus').textContent='傾角測量已啟用';
+      await ensurePermission();
+      dipMode=true;
+      document.body.classList.add('dip-mode');
+      el('dipMeasureOverlay').classList.remove('hidden');
+      el('dipBtn').querySelector('span:last-child').textContent='記錄';
+      el('dipMeasureStatus').textContent='對準層面水平線，再按左下角「記錄」';
     }catch(err){
-      el('sensorStatus').textContent=err.message;
+      toast(err.message,5000);
     }
+  }
+
+  function exitDip(){
+    dipMode=false;
+    document.body.classList.remove('dip-mode');
+    el('dipMeasureOverlay').classList.add('hidden');
+    el('dipBtn').querySelector('span:last-child').textContent='傾角';
+  }
+
+  function recordDip(){
+    if(!Number.isFinite(currentDip)){toast('尚未取得傾角',3000);return}
+    if(!latestGps){toast('尚未取得 GPS 位置',3000);return}
+    const tm=wgs84To3826(latestGps.lon,latestGps.lat);
+    const rec={
+      project:projectName(),
+      time:new Date().toISOString(),
+      longitude:Number(latestGps.lon.toFixed(7)),
+      latitude:Number(latestGps.lat.toFixed(7)),
+      epsg3826_x:Number(tm.x.toFixed(3)),
+      epsg3826_y:Number(tm.y.toFixed(3)),
+      dip_deg:Number(currentDip.toFixed(1)),
+      gps_accuracy_m:Number.isFinite(latestGps.accuracy)?Number(latestGps.accuracy.toFixed(1)):null
+    };
+    const records=loadRecords();
+    records.push(rec);
+    saveRecords(records);
+    toast(`已記錄傾角 ${rec.dip_deg}°`,2500);
+  }
+
+  el('dipBtn')?.addEventListener('click',()=>{
+    if(dipMode)recordDip();
+    else enterDip();
   });
-  el('zeroDipBtn')?.addEventListener('click',()=>{
-    const raw=parseFloat(el('dipValue')?.dataset.raw);
-    if(Number.isFinite(raw)){
-      dipZero=raw;
-      el('dipValue').textContent='0.0°';
-      el('sensorStatus').textContent='已以目前姿態歸零';
-    }
+  el('exitDipModeBtn')?.addEventListener('click',exitDip);
+
+  el('exportDipBtn')?.addEventListener('click',()=>{
+    const rows=loadRecords();
+    if(!rows.length){toast('目前沒有傾角紀錄',3000);return}
+    // Excel-compatible UTF-8 CSV. Opens directly in Excel.
+    const header=['專案','時間','經度_WGS84','緯度_WGS84','EPSG3826_X','EPSG3826_Y','傾角_deg','GPS精度_m'];
+    const csv=[header.join(',')].concat(rows.map(r=>[
+      r.project,r.time,r.longitude,r.latitude,r.epsg3826_x,r.epsg3826_y,r.dip_deg,r.gps_accuracy_m??''
+    ].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','))).join('\r\n');
+    const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=`GeoLive_傾角_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   });
 })();

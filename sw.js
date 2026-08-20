@@ -1,5 +1,5 @@
 
-const APP_CACHE='geolive-app-0804-1718-v1';
+const APP_CACHE='geolive-app-0804-1719-v1';
 const REGION_CACHE_PREFIX='geolive-region-';
 const TILE_SOURCE='https://wmts.nlsc.gov.tw/wmts/EMAP6_OPENDATA/default/GoogleMapsCompatible/{z}/{y}/{x}';
 
